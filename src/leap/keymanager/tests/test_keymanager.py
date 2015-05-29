@@ -20,10 +20,12 @@
 Tests for the Key Manager.
 """
 
+import json
 
+from base64 import b64encode
 from datetime import datetime
 from mock import Mock
-from twisted.internet.defer import inlineCallbacks
+from twisted.internet.defer import Deferred, inlineCallbacks
 from twisted.trial import unittest
 
 from leap.keymanager import (
@@ -178,9 +180,8 @@ class KeyManagerKeyManagementTestCase(KeyManagerWithSoledadTestCase):
         token = "mytoken"
         km = self._key_manager(token=token)
         yield km._wrapper_map[OpenPGPKey].put_ascii_key(PUBLIC_KEY, ADDRESS)
-        km._fetcher.put = Mock()
+        km._http_api.request = Mock()
         # the following data will be used on the send
-        km.ca_cert_path = 'capath'
         km.session_id = 'sessionid'
         km.uid = 'myuid'
         km.api_uri = 'apiuri'
@@ -188,13 +189,13 @@ class KeyManagerKeyManagementTestCase(KeyManagerWithSoledadTestCase):
         yield km.send_key(OpenPGPKey)
         # setup expected args
         pubkey = yield km.get_key(km._address, OpenPGPKey)
-        data = {
+        data = json.dumps({
             km.PUBKEY_KEY: pubkey.key_data,
-        }
+        })
         url = '%s/%s/users/%s.json' % ('apiuri', 'apiver', 'myuid')
-        km._fetcher.put.assert_called_once_with(
-            url, data=data, verify='capath',
-            headers={'Authorization': 'Token token=%s' % token},
+        km._http_api.request.assert_called_once_with(
+            url, method='PUT', body=data,
+            headers={'Authorization': ['Token token=%s' % b64encode(token)]},
         )
 
     def test_fetch_keys_from_server(self):
@@ -204,10 +205,9 @@ class KeyManagerKeyManagementTestCase(KeyManagerWithSoledadTestCase):
         km = self._key_manager(url=NICKSERVER_URI)
 
         def verify_the_call(_):
-            km._fetcher.get.assert_called_once_with(
+            km._http_api.request.assert_called_once_with(
                 NICKSERVER_URI,
-                data={'address': ADDRESS_2},
-                verify='cacertpath',
+                body=json.dumps({'address': ADDRESS_2}),
             )
 
         d = self._fetch_key(km, ADDRESS_2, PUBLIC_KEY_2)
@@ -242,19 +242,13 @@ class KeyManagerKeyManagementTestCase(KeyManagerWithSoledadTestCase):
         """
         :returns: a Deferred that will fire with the OpenPGPKey
         """
-        class Response(object):
-            status_code = 200
-            headers = {'content-type': 'application/json'}
+        response = json.dumps({
+            "address": address,
+            "openpgp": key,
+        })
 
-            def json(self):
-                return {'address': address, 'openpgp': key}
-
-            def raise_for_status(self):
-                pass
-
-        # mock the fetcher so it returns the key for ADDRESS_2
-        km._fetcher.get = Mock(return_value=Response())
-        km.ca_cert_path = 'cacertpath'
+        # mock the http client so it returns the key for ADDRESS_2
+        km._http_api.request = self._mock_deferred(response)
         # try to key get without fetching from server
         d_fail = km.get_key(address, OpenPGPKey, fetch_remote=False)
         d = self.assertFailure(d_fail, KeyNotFound)
@@ -281,12 +275,7 @@ class KeyManagerKeyManagementTestCase(KeyManagerWithSoledadTestCase):
         the local storage
         """
         km = self._key_manager()
-
-        class Response(object):
-            ok = True
-            content = PUBLIC_KEY
-
-        km._fetcher.get = Mock(return_value=Response())
+        km._http.request = self._mock_deferred(PUBLIC_KEY)
         km.ca_cert_path = 'cacertpath'
 
         yield km.fetch_key(ADDRESS, "http://site.domain/key", OpenPGPKey)
@@ -298,12 +287,7 @@ class KeyManagerKeyManagementTestCase(KeyManagerWithSoledadTestCase):
         Test that fetch key raises KeyNotFound if no key in the url
         """
         km = self._key_manager()
-
-        class Response(object):
-            ok = True
-            content = ""
-
-        km._fetcher.get = Mock(return_value=Response())
+        km._http.request = self._mock_deferred("")
         km.ca_cert_path = 'cacertpath'
         d = km.fetch_key(ADDRESS, "http://site.domain/key", OpenPGPKey)
         return self.assertFailure(d, KeyNotFound)
@@ -314,15 +298,14 @@ class KeyManagerKeyManagementTestCase(KeyManagerWithSoledadTestCase):
         don't match
         """
         km = self._key_manager()
-
-        class Response(object):
-            ok = True
-            content = PUBLIC_KEY
-
-        km._fetcher.get = Mock(return_value=Response())
-        km.ca_cert_path = 'cacertpath'
+        km._http.request = self._mock_deferred(PUBLIC_KEY)
         d = km.fetch_key(ADDRESS_2, "http://site.domain/key", OpenPGPKey)
         return self.assertFailure(d, KeyAddressMismatch)
+
+    def _mock_deferred(self, value):
+        d = Deferred()
+        d.callback(value)
+        return Mock(return_value=d)
 
 
 class KeyManagerCryptoTestCase(KeyManagerWithSoledadTestCase):
