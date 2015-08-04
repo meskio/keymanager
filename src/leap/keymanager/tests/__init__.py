@@ -24,6 +24,7 @@ import os.path
 from twisted.internet.defer import gatherResults
 from twisted.trial import unittest
 
+from leap.common.events import flags
 from leap.common.testing.basetest import BaseLeapTest
 from leap.soledad.client import Soledad
 from leap.keymanager import KeyManager
@@ -37,6 +38,7 @@ ADDRESS_2 = 'anotheruser@leap.se'
 class KeyManagerWithSoledadTestCase(unittest.TestCase, BaseLeapTest):
 
     def setUp(self):
+        flags.EVENTS_ENABLED = False
         self.setUpEnv()
         self.gpg_binary_path = self._find_gpg()
 
